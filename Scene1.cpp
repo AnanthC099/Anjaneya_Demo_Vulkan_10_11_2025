@@ -109,8 +109,8 @@ static const DWORD K_SCENE1_POST_ANIM_EXTRA_MS      = 3000u;
 static const DWORD K_SCENE2_HOLD_MS                 = 10000u;
 static const DWORD K_SCENE2_FOCUS_PULL_MS           = 4500u;
 static const DWORD K_SCENE3_HOLD_MS                 = 5000u;
-static const DWORD K_SCENE3_PRE_FADE_WAIT_MS        = 3000u;
-static const DWORD K_SCENE3_FADE_TO_BLACK_MS        = 5000u;
+static const DWORD K_SCENE3_PRE_FADE_WAIT_MS        = 3500u; // allow finale to breathe before fade
+static const DWORD K_SCENE3_FADE_TO_BLACK_MS        = 7000u; // longer tail for softer visual + audio fade
 
 typedef enum SequenceStateTag
 {
@@ -619,8 +619,10 @@ static void UpdateShowcaseSequenceInternal(void)
         break;
 
     case SEQUENCE_SCENE3_FADE_TO_BLACK:
+    {
         fadeProgress = Clamp01((now - sSequenceStateStartMs) / (float)K_SCENE3_FADE_TO_BLACK_MS);
-        gCtx_Switcher.gFade = 1.0f - fadeProgress;
+        float easedFade = ease01(fadeProgress);
+        gCtx_Switcher.gFade = 1.0f - easedFade;
         UpdateBlendFadeInternal(gCtx_Switcher.gFade);
         SceneSwitcher_SetScene0AudioGain(gCtx_Switcher.gFade);
         if (fabsf(gCtx_Switcher.gScene23FocusPullFactor) > 5e-4f)
@@ -630,6 +632,7 @@ static void UpdateShowcaseSequenceInternal(void)
         }
         if (fadeProgress >= 1.0f) EnterSequenceState(SEQUENCE_COMPLETE);
         break;
+    }
 
     case SEQUENCE_COMPLETE:
         StopShowcaseSequenceInternal();

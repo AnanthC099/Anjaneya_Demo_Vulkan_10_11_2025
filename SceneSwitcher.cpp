@@ -60,6 +60,7 @@ static ALCdevice* gScene0AudioDevice = NULL;
 static ALCcontext* gScene0AudioContext = NULL;
 static ALuint gScene0AudioBuffer = 0;
 static ALuint gScene0AudioSource = 0;
+static float gScene0AudioGain = 1.0f;
 
 static LARGE_INTEGER gHighFreqTimerFrequency = { 0 };
 static LARGE_INTEGER gHighFreqTimerStart = { 0 };
@@ -76,6 +77,7 @@ static void ApplyScenePhase(SequencePhase phase);
 static void RequestScenePhase(SequencePhase phase);
 static VkResult CreateUniformBufferForScene(GlobalContext_UniformData* uniformData);
 void BeginScene0Audio(void);
+void SceneSwitcher_SetScene0AudioGain(float gain);
 static BOOL EnsureScene0AudioInitialized(void);
 static void ShutdownScene0Audio(void);
 static BOOL LoadWaveFileIntoBuffer(const char* filename, ALuint buffer);
@@ -235,6 +237,7 @@ static void ShutdownScene0Audio(void)
 
     gScene0AudioInitialized = FALSE;
     gScene0AudioIsPlaying = FALSE;
+    gScene0AudioGain = 1.0f;
 
     if (hadResources && gCtx_Switcher.gpFile)
     {
@@ -592,6 +595,7 @@ static BOOL EnsureScene0AudioInitialized(void)
 
     gScene0AudioInitialized = TRUE;
     gScene0AudioIsPlaying = FALSE;
+    SceneSwitcher_SetScene0AudioGain(gScene0AudioGain);
 
     if (gCtx_Switcher.gpFile)
     {
@@ -638,6 +642,40 @@ void BeginScene0Audio(void)
     if (gCtx_Switcher.gpFile)
     {
         fprintf(gCtx_Switcher.gpFile, "BeginScene0Audio() --> Playing Omega_FadeOut.wav via OpenAL\n");
+    }
+}
+
+void SceneSwitcher_SetScene0AudioGain(float gain)
+{
+    if (gain < 0.0f)
+    {
+        gain = 0.0f;
+    }
+    else if (gain > 1.0f)
+    {
+        gain = 1.0f;
+    }
+
+    if (fabsf(gScene0AudioGain - gain) <= 1e-4f && gScene0AudioInitialized && gScene0AudioSource != 0)
+    {
+        return;
+    }
+
+    gScene0AudioGain = gain;
+
+    if (!gScene0AudioInitialized || gScene0AudioSource == 0)
+    {
+        return;
+    }
+
+    alGetError();
+    alSourcef(gScene0AudioSource, AL_GAIN, gain);
+    ALenum err = alGetError();
+    if (err != AL_NO_ERROR && gCtx_Switcher.gpFile)
+    {
+        fprintf(gCtx_Switcher.gpFile,
+                "SceneSwitcher_SetScene0AudioGain() --> alSourcef(AL_GAIN) failed %d\n",
+                err);
     }
 }
 

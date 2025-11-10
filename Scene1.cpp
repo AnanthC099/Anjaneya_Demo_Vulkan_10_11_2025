@@ -334,6 +334,7 @@ static void EnterSequenceState(SequenceState state)
         gCtx_Switcher.gScene23FocusPullFactor = 0.0f;
         gCtx_Switcher.gFade = 0.0f; // remain black before reveal
         UpdateBlendFadeInternal(gCtx_Switcher.gFade);
+        SceneSwitcher_SetScene0AudioGain(1.0f);
         break;
     case SEQUENCE_SCENE0_FADE_IN:
         gActiveScene = ACTIVE_SCENE_SCENE0;
@@ -342,6 +343,7 @@ static void EnterSequenceState(SequenceState state)
         gCtx_Switcher.gScene23FocusPullActive = FALSE;
         gCtx_Switcher.gScene23FocusPullFactor = 0.0f;
         BeginScene0Audio();
+        SceneSwitcher_SetScene0AudioGain(1.0f);
         gCtx_Switcher.gFade = 0.0f; // fade will animate towards full visibility
         UpdateBlendFadeInternal(gCtx_Switcher.gFade);
         break;
@@ -576,6 +578,7 @@ static void UpdateShowcaseSequenceInternal(void)
     case SEQUENCE_SCENE3_HOLD:
         gCtx_Switcher.gFade = 1.0f;
         UpdateBlendFadeInternal(gCtx_Switcher.gFade);
+        SceneSwitcher_SetScene0AudioGain(1.0f);
         if (fabsf(1.0f - gCtx_Switcher.gScene23FocusPullFactor) > 5e-4f)
         {
             gCtx_Switcher.gScene23FocusPullFactor = 1.0f;
@@ -592,6 +595,7 @@ static void UpdateShowcaseSequenceInternal(void)
         fadeProgress = Clamp01((now - sSequenceStateStartMs) / (float)K_SCENE3_FADE_TO_BLACK_MS);
         gCtx_Switcher.gFade = 1.0f - fadeProgress;
         UpdateBlendFadeInternal(gCtx_Switcher.gFade);
+        SceneSwitcher_SetScene0AudioGain(gCtx_Switcher.gFade);
         if (fabsf(gCtx_Switcher.gScene23FocusPullFactor) > 5e-4f)
         {
             gCtx_Switcher.gScene23FocusPullFactor = 0.0f;

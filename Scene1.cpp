@@ -99,7 +99,7 @@ static float       sRecordedBlendFade = 0.0f;
 // Scene0 (Intro) : pause 2s, fade in over 3s, hold for 7s, transition overlay across 8s
 // Scene1 (Main)  : run animation and linger 3s after it completes
 // Scene2 (Final) : hold combined main scene + credits for 10s before focus pull to finale
-// Scene3 (Finale): hold fully-focused composite for 5s, then fade to black over 3.5s
+// Scene3 (Finale): hold fully-focused composite for 5s, pause 3s, then fade to black over 5s
 static const DWORD K_SCENE0_FADE_IN_DELAY_MS        = 2000u;
 static const DWORD K_SCENE0_FADE_IN_MS              = 3000u;
 static const DWORD K_SCENE0_HOLD_MS                 = 7000u;
@@ -109,7 +109,8 @@ static const DWORD K_SCENE1_POST_ANIM_EXTRA_MS      = 3000u;
 static const DWORD K_SCENE2_HOLD_MS                 = 10000u;
 static const DWORD K_SCENE2_FOCUS_PULL_MS           = 4500u;
 static const DWORD K_SCENE3_HOLD_MS                 = 5000u;
-static const DWORD K_SCENE3_FADE_TO_BLACK_MS        = 3500u;
+static const DWORD K_SCENE3_PRE_FADE_WAIT_MS        = 3000u;
+static const DWORD K_SCENE3_FADE_TO_BLACK_MS        = 5000u;
 
 typedef enum SequenceStateTag
 {
@@ -123,6 +124,7 @@ typedef enum SequenceStateTag
     SEQUENCE_SCENE2_HOLD,
     SEQUENCE_SCENE2_FOCUS_PULL,
     SEQUENCE_SCENE3_HOLD,
+    SEQUENCE_SCENE3_PRE_FADE_WAIT,
     SEQUENCE_SCENE3_FADE_TO_BLACK,
     SEQUENCE_COMPLETE
 } SequenceState;
@@ -422,6 +424,15 @@ static void EnterSequenceState(SequenceState state)
         gCtx_Switcher.gFade = 1.0f;
         UpdateBlendFadeInternal(gCtx_Switcher.gFade);
         break;
+    case SEQUENCE_SCENE3_PRE_FADE_WAIT:
+        gActiveScene = ACTIVE_SCENE_SCENE3;
+        gCtx_Switcher.gScene01DoubleExposureActive = FALSE;
+        gCtx_Switcher.gScene12CrossfadeActive = FALSE;
+        gCtx_Switcher.gScene23FocusPullActive = FALSE;
+        gCtx_Switcher.gScene23FocusPullFactor = 1.0f;
+        gCtx_Switcher.gFade = 1.0f;
+        UpdateBlendFadeInternal(gCtx_Switcher.gFade);
+        break;
     case SEQUENCE_SCENE3_FADE_TO_BLACK:
         gActiveScene = ACTIVE_SCENE_SCENE3;
         gCtx_Switcher.gScene01DoubleExposureActive = FALSE;
@@ -586,6 +597,22 @@ static void UpdateShowcaseSequenceInternal(void)
         }
         elapsed = now - sSequenceStateStartMs;
         if (elapsed >= K_SCENE3_HOLD_MS)
+        {
+            EnterSequenceState(SEQUENCE_SCENE3_PRE_FADE_WAIT);
+        }
+        break;
+
+    case SEQUENCE_SCENE3_PRE_FADE_WAIT:
+        gCtx_Switcher.gFade = 1.0f;
+        UpdateBlendFadeInternal(gCtx_Switcher.gFade);
+        SceneSwitcher_SetScene0AudioGain(1.0f);
+        if (fabsf(1.0f - gCtx_Switcher.gScene23FocusPullFactor) > 5e-4f)
+        {
+            gCtx_Switcher.gScene23FocusPullFactor = 1.0f;
+            sCmdBuffersDirty = TRUE;
+        }
+        elapsed = now - sSequenceStateStartMs;
+        if (elapsed >= K_SCENE3_PRE_FADE_WAIT_MS)
         {
             EnterSequenceState(SEQUENCE_SCENE3_FADE_TO_BLACK);
         }

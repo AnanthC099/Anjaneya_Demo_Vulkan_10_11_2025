@@ -5,7 +5,9 @@
 #include <string.h>
 #include <math.h>
 #include <stdarg.h>
-#include <mmsystem.h>
+#include <stdint.h>
+#include <AL/al.h>
+#include <AL/alc.h>
 //header file for texture
 #define STB_IMAGE_IMPLEMENTATION
 #include "stb_image.h"
@@ -14,7 +16,7 @@
 
 #pragma comment(lib, "user32.lib")
 #pragma comment(lib, "gdi32.lib")
-#pragma comment(lib, "winmm.lib")
+#pragma comment(lib, "OpenAL32.lib")
 // Vulkan related library
 #pragma comment(lib, "vulkan-1.lib")
 
@@ -53,6 +55,11 @@ static VkDescriptorSet gCompositeDescriptorSet_array[4] =
 };
 static VkCommandBuffer* gCompositeCommandBuffer_array = NULL;
 static BOOL gScene0AudioIsPlaying = FALSE;
+static BOOL gScene0AudioInitialized = FALSE;
+static ALCdevice* gScene0AudioDevice = NULL;
+static ALCcontext* gScene0AudioContext = NULL;
+static ALuint gScene0AudioBuffer = 0;
+static ALuint gScene0AudioSource = 0;
 
 static LARGE_INTEGER gHighFreqTimerFrequency = { 0 };
 static LARGE_INTEGER gHighFreqTimerStart = { 0 };
@@ -69,6 +76,9 @@ static void ApplyScenePhase(SequencePhase phase);
 static void RequestScenePhase(SequencePhase phase);
 static VkResult CreateUniformBufferForScene(GlobalContext_UniformData* uniformData);
 void BeginScene0Audio(void);
+static BOOL EnsureScene0AudioInitialized(void);
+static void ShutdownScene0Audio(void);
+static BOOL LoadWaveFileIntoBuffer(const char* filename, ALuint buffer);
 
 static void StartHighFrequencyTimer(void);
 static void ResetTimelineLoggingState(void);
@@ -186,24 +196,448 @@ static void DestroyCompositeResources(void)
     }
 }
 
+static void ShutdownScene0Audio(void)
+{
+    BOOL hadResources = (gScene0AudioSource != 0) || (gScene0AudioBuffer != 0) ||
+                        (gScene0AudioContext != NULL) || (gScene0AudioDevice != NULL) ||
+                        gScene0AudioInitialized;
+
+    if (gScene0AudioContext)
+    {
+        alcMakeContextCurrent(gScene0AudioContext);
+    }
+
+    if (gScene0AudioSource != 0)
+    {
+        alSourceStop(gScene0AudioSource);
+        alDeleteSources(1, &gScene0AudioSource);
+        gScene0AudioSource = 0;
+    }
+
+    if (gScene0AudioBuffer != 0)
+    {
+        alDeleteBuffers(1, &gScene0AudioBuffer);
+        gScene0AudioBuffer = 0;
+    }
+
+    if (gScene0AudioContext)
+    {
+        alcMakeContextCurrent(NULL);
+        alcDestroyContext(gScene0AudioContext);
+        gScene0AudioContext = NULL;
+    }
+
+    if (gScene0AudioDevice)
+    {
+        alcCloseDevice(gScene0AudioDevice);
+        gScene0AudioDevice = NULL;
+    }
+
+    gScene0AudioInitialized = FALSE;
+    gScene0AudioIsPlaying = FALSE;
+
+    if (hadResources && gCtx_Switcher.gpFile)
+    {
+        fprintf(gCtx_Switcher.gpFile, "ShutdownScene0Audio() --> OpenAL resources released\n");
+    }
+}
+
+static BOOL LoadWaveFileIntoBuffer(const char* filename, ALuint buffer)
+{
+    typedef struct WaveFormatTag
+    {
+        uint16_t audioFormat;
+        uint16_t numChannels;
+        uint32_t sampleRate;
+        uint32_t byteRate;
+        uint16_t blockAlign;
+        uint16_t bitsPerSample;
+    } WaveFormat;
+
+    FILE* file = fopen(filename, "rb");
+    if (!file)
+    {
+        if (gCtx_Switcher.gpFile)
+        {
+            fprintf(gCtx_Switcher.gpFile, "LoadWaveFileIntoBuffer() --> Failed to open %s\n", filename);
+        }
+        return FALSE;
+    }
+
+    BOOL success = FALSE;
+    unsigned char* data = NULL;
+    uint32_t dataSize = 0;
+    WaveFormat format;
+    memset(&format, 0, sizeof(format));
+
+    do
+    {
+        char riffId[4];
+        if (fread(riffId, 1, sizeof(riffId), file) != sizeof(riffId) || memcmp(riffId, "RIFF", 4) != 0)
+        {
+            if (gCtx_Switcher.gpFile)
+            {
+                fprintf(gCtx_Switcher.gpFile, "LoadWaveFileIntoBuffer() --> Invalid RIFF header in %s\n", filename);
+            }
+            break;
+        }
+
+        uint32_t riffSize = 0;
+        if (fread(&riffSize, sizeof(riffSize), 1, file) != 1)
+        {
+            if (gCtx_Switcher.gpFile)
+            {
+                fprintf(gCtx_Switcher.gpFile, "LoadWaveFileIntoBuffer() --> Failed to read RIFF size from %s\n", filename);
+            }
+            break;
+        }
+        (void)riffSize;
+
+        char waveId[4];
+        if (fread(waveId, 1, sizeof(waveId), file) != sizeof(waveId) || memcmp(waveId, "WAVE", 4) != 0)
+        {
+            if (gCtx_Switcher.gpFile)
+            {
+                fprintf(gCtx_Switcher.gpFile, "LoadWaveFileIntoBuffer() --> Invalid WAVE header in %s\n", filename);
+            }
+            break;
+        }
+
+        BOOL fmtFound = FALSE;
+        BOOL dataFound = FALSE;
+
+        while (!fmtFound || !dataFound)
+        {
+            char chunkId[4];
+            if (fread(chunkId, 1, sizeof(chunkId), file) != sizeof(chunkId))
+            {
+                if (gCtx_Switcher.gpFile)
+                {
+                    fprintf(gCtx_Switcher.gpFile, "LoadWaveFileIntoBuffer() --> Unexpected end of file in %s\n", filename);
+                }
+                goto cleanup;
+            }
+
+            uint32_t chunkSize = 0;
+            if (fread(&chunkSize, sizeof(chunkSize), 1, file) != 1)
+            {
+                if (gCtx_Switcher.gpFile)
+                {
+                    fprintf(gCtx_Switcher.gpFile, "LoadWaveFileIntoBuffer() --> Failed to read chunk size in %s\n", filename);
+                }
+                goto cleanup;
+            }
+
+            if (memcmp(chunkId, "fmt ", 4) == 0)
+            {
+                unsigned char* fmtData = (unsigned char*)malloc(chunkSize);
+                if (!fmtData)
+                {
+                    if (gCtx_Switcher.gpFile)
+                    {
+                        fprintf(gCtx_Switcher.gpFile, "LoadWaveFileIntoBuffer() --> Memory allocation failed for fmt chunk in %s\n", filename);
+                    }
+                    goto cleanup;
+                }
+
+                if (fread(fmtData, 1, chunkSize, file) != chunkSize)
+                {
+                    free(fmtData);
+                    if (gCtx_Switcher.gpFile)
+                    {
+                        fprintf(gCtx_Switcher.gpFile, "LoadWaveFileIntoBuffer() --> Failed to read fmt chunk in %s\n", filename);
+                    }
+                    goto cleanup;
+                }
+
+                if (chunkSize < 16)
+                {
+                    free(fmtData);
+                    if (gCtx_Switcher.gpFile)
+                    {
+                        fprintf(gCtx_Switcher.gpFile, "LoadWaveFileIntoBuffer() --> fmt chunk too small in %s\n", filename);
+                    }
+                    goto cleanup;
+                }
+
+                size_t copySize = (chunkSize < sizeof(format)) ? chunkSize : sizeof(format);
+                memcpy(&format, fmtData, copySize);
+                free(fmtData);
+                fmtFound = TRUE;
+            }
+            else if (memcmp(chunkId, "data", 4) == 0)
+            {
+                data = (unsigned char*)malloc(chunkSize);
+                if (!data)
+                {
+                    if (gCtx_Switcher.gpFile)
+                    {
+                        fprintf(gCtx_Switcher.gpFile, "LoadWaveFileIntoBuffer() --> Memory allocation failed for data chunk in %s\n", filename);
+                    }
+                    goto cleanup;
+                }
+
+                if (fread(data, 1, chunkSize, file) != chunkSize)
+                {
+                    if (gCtx_Switcher.gpFile)
+                    {
+                        fprintf(gCtx_Switcher.gpFile, "LoadWaveFileIntoBuffer() --> Failed to read data chunk in %s\n", filename);
+                    }
+                    goto cleanup;
+                }
+
+                dataSize = chunkSize;
+                dataFound = TRUE;
+            }
+            else
+            {
+                if (fseek(file, chunkSize, SEEK_CUR) != 0)
+                {
+                    if (gCtx_Switcher.gpFile)
+                    {
+                        fprintf(gCtx_Switcher.gpFile, "LoadWaveFileIntoBuffer() --> Failed to skip chunk in %s\n", filename);
+                    }
+                    goto cleanup;
+                }
+            }
+
+            if (chunkSize & 1)
+            {
+                if (fseek(file, 1, SEEK_CUR) != 0)
+                {
+                    if (gCtx_Switcher.gpFile)
+                    {
+                        fprintf(gCtx_Switcher.gpFile, "LoadWaveFileIntoBuffer() --> Failed to skip padding byte in %s\n", filename);
+                    }
+                    goto cleanup;
+                }
+            }
+
+            if (fmtFound && dataFound)
+            {
+                break;
+            }
+        }
+
+        if (!fmtFound || !dataFound)
+        {
+            if (gCtx_Switcher.gpFile)
+            {
+                fprintf(gCtx_Switcher.gpFile, "LoadWaveFileIntoBuffer() --> Missing required chunks in %s\n", filename);
+            }
+            break;
+        }
+
+        if (format.audioFormat != 1)
+        {
+            if (gCtx_Switcher.gpFile)
+            {
+                fprintf(gCtx_Switcher.gpFile, "LoadWaveFileIntoBuffer() --> Unsupported audio format %u in %s\n", format.audioFormat, filename);
+            }
+            break;
+        }
+
+        ALenum alFormat = AL_NONE;
+        if (format.numChannels == 1)
+        {
+            if (format.bitsPerSample == 8)
+            {
+                alFormat = AL_FORMAT_MONO8;
+            }
+            else if (format.bitsPerSample == 16)
+            {
+                alFormat = AL_FORMAT_MONO16;
+            }
+        }
+        else if (format.numChannels == 2)
+        {
+            if (format.bitsPerSample == 8)
+            {
+                alFormat = AL_FORMAT_STEREO8;
+            }
+            else if (format.bitsPerSample == 16)
+            {
+                alFormat = AL_FORMAT_STEREO16;
+            }
+        }
+
+        if (alFormat == AL_NONE)
+        {
+            if (gCtx_Switcher.gpFile)
+            {
+                fprintf(gCtx_Switcher.gpFile, "LoadWaveFileIntoBuffer() --> Unsupported channel (%u) or bit depth (%u) in %s\n",
+                        format.numChannels,
+                        format.bitsPerSample,
+                        filename);
+            }
+            break;
+        }
+
+        alGetError();
+        alBufferData(buffer, alFormat, data, (ALsizei)dataSize, (ALsizei)format.sampleRate);
+        if (alGetError() != AL_NO_ERROR)
+        {
+            if (gCtx_Switcher.gpFile)
+            {
+                fprintf(gCtx_Switcher.gpFile, "LoadWaveFileIntoBuffer() --> alBufferData() failed for %s\n", filename);
+            }
+            break;
+        }
+
+        success = TRUE;
+    } while (0);
+
+cleanup:
+    if (data)
+    {
+        free(data);
+        data = NULL;
+    }
+
+    fclose(file);
+    return success;
+}
+
+static BOOL EnsureScene0AudioInitialized(void)
+{
+    if (gScene0AudioInitialized)
+    {
+        return TRUE;
+    }
+
+    gScene0AudioDevice = alcOpenDevice(NULL);
+    if (!gScene0AudioDevice)
+    {
+        if (gCtx_Switcher.gpFile)
+        {
+            fprintf(gCtx_Switcher.gpFile, "EnsureScene0AudioInitialized() --> alcOpenDevice() failed\n");
+        }
+        return FALSE;
+    }
+
+    gScene0AudioContext = alcCreateContext(gScene0AudioDevice, NULL);
+    if (!gScene0AudioContext)
+    {
+        if (gCtx_Switcher.gpFile)
+        {
+            fprintf(gCtx_Switcher.gpFile, "EnsureScene0AudioInitialized() --> alcCreateContext() failed\n");
+        }
+        ShutdownScene0Audio();
+        return FALSE;
+    }
+
+    if (!alcMakeContextCurrent(gScene0AudioContext))
+    {
+        if (gCtx_Switcher.gpFile)
+        {
+            fprintf(gCtx_Switcher.gpFile, "EnsureScene0AudioInitialized() --> alcMakeContextCurrent() failed\n");
+        }
+        ShutdownScene0Audio();
+        return FALSE;
+    }
+
+    alGetError();
+    alGenBuffers(1, &gScene0AudioBuffer);
+    if (alGetError() != AL_NO_ERROR)
+    {
+        if (gCtx_Switcher.gpFile)
+        {
+            fprintf(gCtx_Switcher.gpFile, "EnsureScene0AudioInitialized() --> alGenBuffers() failed\n");
+        }
+        ShutdownScene0Audio();
+        return FALSE;
+    }
+
+    if (!LoadWaveFileIntoBuffer("Omega_FadeOut.wav", gScene0AudioBuffer))
+    {
+        ShutdownScene0Audio();
+        return FALSE;
+    }
+
+    alGetError();
+    alGenSources(1, &gScene0AudioSource);
+    if (alGetError() != AL_NO_ERROR)
+    {
+        if (gCtx_Switcher.gpFile)
+        {
+            fprintf(gCtx_Switcher.gpFile, "EnsureScene0AudioInitialized() --> alGenSources() failed\n");
+        }
+        ShutdownScene0Audio();
+        return FALSE;
+    }
+
+    alGetError();
+    alSourcei(gScene0AudioSource, AL_BUFFER, gScene0AudioBuffer);
+    if (alGetError() != AL_NO_ERROR)
+    {
+        if (gCtx_Switcher.gpFile)
+        {
+            fprintf(gCtx_Switcher.gpFile, "EnsureScene0AudioInitialized() --> alSourcei(AL_BUFFER) failed\n");
+        }
+        ShutdownScene0Audio();
+        return FALSE;
+    }
+
+    alGetError();
+    alSourcei(gScene0AudioSource, AL_LOOPING, AL_TRUE);
+    if (alGetError() != AL_NO_ERROR)
+    {
+        if (gCtx_Switcher.gpFile)
+        {
+            fprintf(gCtx_Switcher.gpFile, "EnsureScene0AudioInitialized() --> alSourcei(AL_LOOPING) failed\n");
+        }
+        ShutdownScene0Audio();
+        return FALSE;
+    }
+
+    gScene0AudioInitialized = TRUE;
+    gScene0AudioIsPlaying = FALSE;
+
+    if (gCtx_Switcher.gpFile)
+    {
+        fprintf(gCtx_Switcher.gpFile, "EnsureScene0AudioInitialized() --> OpenAL initialized for Omega_FadeOut.wav\n");
+    }
+
+    return TRUE;
+}
+
 void BeginScene0Audio(void)
 {
-    if (gScene0AudioIsPlaying)
+    if (!EnsureScene0AudioInitialized())
     {
+        if (gCtx_Switcher.gpFile)
+        {
+            fprintf(gCtx_Switcher.gpFile, "BeginScene0Audio() --> EnsureScene0AudioInitialized() failed\n");
+        }
         return;
     }
 
-    if (PlaySound(TEXT("Omega_FadeOut.wav"), NULL, SND_FILENAME | SND_ASYNC | SND_LOOP))
+    if (gScene0AudioIsPlaying)
     {
-        gScene0AudioIsPlaying = TRUE;
-        if (gCtx_Switcher.gpFile)
+        ALint state = AL_STOPPED;
+        alGetError();
+        alGetSourcei(gScene0AudioSource, AL_SOURCE_STATE, &state);
+        if (alGetError() == AL_NO_ERROR && state == AL_PLAYING)
         {
-            fprintf(gCtx_Switcher.gpFile, "BeginScene0Audio() --> Playing Omega_FadeOut.wav\n");
+            return;
         }
     }
-    else if (gCtx_Switcher.gpFile)
+
+    alGetError();
+    alSourcePlay(gScene0AudioSource);
+    if (alGetError() != AL_NO_ERROR)
     {
-        fprintf(gCtx_Switcher.gpFile, "BeginScene0Audio() --> PlaySound failed\n");
+        if (gCtx_Switcher.gpFile)
+        {
+            fprintf(gCtx_Switcher.gpFile, "BeginScene0Audio() --> alSourcePlay() failed\n");
+        }
+        return;
+    }
+
+    gScene0AudioIsPlaying = TRUE;
+    if (gCtx_Switcher.gpFile)
+    {
+        fprintf(gCtx_Switcher.gpFile, "BeginScene0Audio() --> Playing Omega_FadeOut.wav via OpenAL\n");
     }
 }
 
@@ -965,6 +1399,7 @@ static VkResult InitializeOffscreenResources(void)
 
 void InitializeSceneSwitcherGlobals(void)
 {
+    ShutdownScene0Audio();
     memset(&gWin32WindowCtx_Switcher, 0, sizeof(gWin32WindowCtx_Switcher));
     memset(&gCtx_Switcher, 0, sizeof(gCtx_Switcher));
     ResetOffscreenTargets();
@@ -995,6 +1430,11 @@ void InitializeSceneSwitcherGlobals(void)
     gCtx_Switcher.gScene23FocusPullActive = FALSE;
     gCtx_Switcher.gScene23FocusPullFactor = 0.0f;
     gScene0AudioIsPlaying = FALSE;
+    gScene0AudioInitialized = FALSE;
+    gScene0AudioDevice = NULL;
+    gScene0AudioContext = NULL;
+    gScene0AudioBuffer = 0;
+    gScene0AudioSource = 0;
 
     memset(&gCompositeUniformData, 0, sizeof(gCompositeUniformData));
 }
@@ -2760,6 +3200,8 @@ void Update(void)
 void Uninitialize(void)
 {
         //code
+        ShutdownScene0Audio();
+
         if (gWin32WindowCtx_Switcher.gbFullscreen == 1)
         {
                 gWin32WindowCtx_Switcher.dwStyle = GetWindowLong(gWin32WindowCtx_Switcher.ghwnd, GWL_STYLE);

@@ -1085,10 +1085,6 @@ static void RequestScenePhase(SequencePhase phase)
     gCtx_Switcher.gSequencePhase = phase;
     ApplyScenePhase(phase);
 
-    if (!gHighFreqTimerRunning)
-    {
-        StartHighFrequencyTimer();
-    }
 }
 
 /* Scene 1 texture handles (GPU) */
@@ -1730,12 +1726,12 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT iMsg, WPARAM wParam, LPARAM lParam)
                         break;
 
                 case VK_F4:
+                        StartHighFrequencyTimer();
                         Scene1_StartSequence();
                         fprintf(gCtx_Switcher.gpFile, "WndProc() --> Showcase sequence started\n");
                         break;
 
                 case SCENESWITCHER_KEY_SCENE3:
-                        StartHighFrequencyTimer();
                         Scene1_StopSequence();
                         RequestScenePhase(SEQUENCE_PHASE_SCENE3);
                         fprintf(gCtx_Switcher.gpFile, "WndProc() --> Requested Scene3\n");

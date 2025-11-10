@@ -4,6 +4,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <math.h>
+#include <stdarg.h>
 #include <mmsystem.h>
 //header file for texture
 #define STB_IMAGE_IMPLEMENTATION
@@ -53,12 +54,27 @@ static VkDescriptorSet gCompositeDescriptorSet_array[4] =
 static VkCommandBuffer* gCompositeCommandBuffer_array = NULL;
 static BOOL gScene0AudioIsPlaying = FALSE;
 
+static LARGE_INTEGER gHighFreqTimerFrequency = { 0 };
+static LARGE_INTEGER gHighFreqTimerStart = { 0 };
+static BOOL gHighFreqTimerRunning = FALSE;
+
+static ActiveScene gTimelineLastActiveScene = ACTIVE_SCENE_NONE;
+static BOOL gTimelinePrevScene01DoubleExposure = FALSE;
+static BOOL gTimelinePrevScene12Crossfade = FALSE;
+static BOOL gTimelinePrevScene23FocusPull = FALSE;
+
 static VkCommandBuffer BeginOneShotCB(void);
 static void EndOneShotCB(VkCommandBuffer commandBuffer);
 static void ApplyScenePhase(SequencePhase phase);
 static void RequestScenePhase(SequencePhase phase);
 static VkResult CreateUniformBufferForScene(GlobalContext_UniformData* uniformData);
 void BeginScene0Audio(void);
+
+static void StartHighFrequencyTimer(void);
+static void ResetTimelineLoggingState(void);
+static void UpdateTimelineLogging(void);
+static void LogTimelineEvent(const char* format, ...);
+static const char* GetSceneName(ActiveScene scene);
 
 static void ResetOffscreenTargets(void)
 {
@@ -188,6 +204,160 @@ void BeginScene0Audio(void)
     else if (gCtx_Switcher.gpFile)
     {
         fprintf(gCtx_Switcher.gpFile, "BeginScene0Audio() --> PlaySound failed\n");
+    }
+}
+
+static const char* GetSceneName(ActiveScene scene)
+{
+    switch (scene)
+    {
+    case ACTIVE_SCENE_SCENE0:
+        return "Scene0";
+    case ACTIVE_SCENE_SCENE1:
+        return "Scene1";
+    case ACTIVE_SCENE_SCENE2:
+        return "Scene2";
+    case ACTIVE_SCENE_SCENE3:
+        return "Scene3";
+    case ACTIVE_SCENE_NONE:
+    default:
+        return "None";
+    }
+}
+
+static void ResetTimelineLoggingState(void)
+{
+    gTimelineLastActiveScene = gActiveScene;
+    gTimelinePrevScene01DoubleExposure = gCtx_Switcher.gScene01DoubleExposureActive;
+    gTimelinePrevScene12Crossfade = gCtx_Switcher.gScene12CrossfadeActive;
+    gTimelinePrevScene23FocusPull = gCtx_Switcher.gScene23FocusPullActive;
+
+    if (gTimelineLastActiveScene != ACTIVE_SCENE_NONE && gHighFreqTimerRunning)
+    {
+        LogTimelineEvent("Scene %s started", GetSceneName(gTimelineLastActiveScene));
+    }
+}
+
+static void StartHighFrequencyTimer(void)
+{
+    LARGE_INTEGER freq;
+    LARGE_INTEGER now;
+
+    gHighFreqTimerRunning = FALSE;
+    gHighFreqTimerFrequency.QuadPart = 0;
+    gHighFreqTimerStart.QuadPart = 0;
+
+    if (!QueryPerformanceFrequency(&freq))
+    {
+        if (gCtx_Switcher.gpFile)
+        {
+            fprintf(gCtx_Switcher.gpFile, "StartHighFrequencyTimer() --> QueryPerformanceFrequency failed\n");
+            fflush(gCtx_Switcher.gpFile);
+        }
+        return;
+    }
+
+    if (!QueryPerformanceCounter(&now))
+    {
+        if (gCtx_Switcher.gpFile)
+        {
+            fprintf(gCtx_Switcher.gpFile, "StartHighFrequencyTimer() --> QueryPerformanceCounter failed\n");
+            fflush(gCtx_Switcher.gpFile);
+        }
+        return;
+    }
+
+    gHighFreqTimerFrequency = freq;
+    gHighFreqTimerStart = now;
+    gHighFreqTimerRunning = TRUE;
+
+    ResetTimelineLoggingState();
+
+    if (gCtx_Switcher.gpFile)
+    {
+        fprintf(gCtx_Switcher.gpFile, "[0.000000] High-frequency timeline timer started\n");
+        fflush(gCtx_Switcher.gpFile);
+    }
+}
+
+static void LogTimelineEvent(const char* format, ...)
+{
+    if (!gHighFreqTimerRunning || gCtx_Switcher.gpFile == NULL)
+    {
+        return;
+    }
+
+    if (gHighFreqTimerFrequency.QuadPart == 0)
+    {
+        return;
+    }
+
+    LARGE_INTEGER now;
+    if (!QueryPerformanceCounter(&now))
+    {
+        return;
+    }
+
+    double seconds = (double)(now.QuadPart - gHighFreqTimerStart.QuadPart) /
+                     (double)gHighFreqTimerFrequency.QuadPart;
+
+    if (seconds < 0.0)
+    {
+        seconds = 0.0;
+    }
+
+    fprintf(gCtx_Switcher.gpFile, "[%0.6f] ", seconds);
+
+    va_list args;
+    va_start(args, format);
+    vfprintf(gCtx_Switcher.gpFile, format, args);
+    va_end(args);
+
+    fputc('\n', gCtx_Switcher.gpFile);
+    fflush(gCtx_Switcher.gpFile);
+}
+
+static void UpdateTimelineLogging(void)
+{
+    if (!gHighFreqTimerRunning)
+    {
+        return;
+    }
+
+    ActiveScene currentScene = gActiveScene;
+    if (currentScene != gTimelineLastActiveScene)
+    {
+        if (gTimelineLastActiveScene != ACTIVE_SCENE_NONE)
+        {
+            LogTimelineEvent("Scene %s ended", GetSceneName(gTimelineLastActiveScene));
+        }
+        gTimelineLastActiveScene = currentScene;
+
+        if (currentScene != ACTIVE_SCENE_NONE)
+        {
+            LogTimelineEvent("Scene %s started", GetSceneName(currentScene));
+        }
+    }
+
+    if (gCtx_Switcher.gScene01DoubleExposureActive != gTimelinePrevScene01DoubleExposure)
+    {
+        LogTimelineEvent("Transition Scene0->Scene1 %s",
+                         gCtx_Switcher.gScene01DoubleExposureActive ? "started" : "ended");
+        gTimelinePrevScene01DoubleExposure = gCtx_Switcher.gScene01DoubleExposureActive;
+    }
+
+    if (gCtx_Switcher.gScene12CrossfadeActive != gTimelinePrevScene12Crossfade)
+    {
+        LogTimelineEvent("Transition Scene1->Scene2 crossfade %s",
+                         gCtx_Switcher.gScene12CrossfadeActive ? "started" : "ended");
+        gTimelinePrevScene12Crossfade = gCtx_Switcher.gScene12CrossfadeActive;
+    }
+
+    if (gCtx_Switcher.gScene23FocusPullActive != gTimelinePrevScene23FocusPull)
+    {
+        LogTimelineEvent("Transition Scene2->Scene3 focus pull %s",
+                         gCtx_Switcher.gScene23FocusPullActive ? "started" : "ended");
+        gTimelinePrevScene23FocusPull = gCtx_Switcher.gScene23FocusPullActive;
     }
 }
 
@@ -1560,6 +1730,7 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT iMsg, WPARAM wParam, LPARAM lParam)
                         break;
 
                 case SCENESWITCHER_KEY_SCENE3:
+                        StartHighFrequencyTimer();
                         Scene1_StopSequence();
                         RequestScenePhase(SEQUENCE_PHASE_SCENE3);
                         fprintf(gCtx_Switcher.gpFile, "WndProc() --> Requested Scene3\n");
@@ -2561,6 +2732,7 @@ void Update(void)
         {
             Scene1_UpdateCameraAnim();
         }
+        UpdateTimelineLogging();
         return;
     }
 
@@ -2578,8 +2750,10 @@ void Update(void)
             gCtx_Switcher.gFade = targetFade;
         }
     }
-    
+
     Scene1_UpdateBlendFade(gCtx_Switcher.gFade);
+
+    UpdateTimelineLogging();
 }
 
 void Uninitialize(void)

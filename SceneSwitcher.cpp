@@ -548,7 +548,7 @@ static BOOL EnsureScene0AudioInitialized(void)
         return FALSE;
     }
 
-    if (!LoadWaveFileIntoBuffer("Omega_FadeOut.wav", gScene0AudioBuffer))
+    if (!LoadWaveFileIntoBuffer("Omega.wav", gScene0AudioBuffer))
     {
         ShutdownScene0Audio();
         return FALSE;

@@ -6,8 +6,8 @@
 #include <math.h>
 #include <stdarg.h>
 #include <stdint.h>
-#include "AL/al.h"
-#include "AL/alc.h"
+#include "al.h"
+#include "alc.h"
 //header file for texture
 #define STB_IMAGE_IMPLEMENTATION
 #include "stb_image.h"

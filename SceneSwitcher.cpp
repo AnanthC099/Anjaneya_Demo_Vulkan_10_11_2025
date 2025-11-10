@@ -1084,6 +1084,11 @@ static void RequestScenePhase(SequencePhase phase)
     gCtx_Switcher.gSequenceActive = TRUE;
     gCtx_Switcher.gSequencePhase = phase;
     ApplyScenePhase(phase);
+
+    if (!gHighFreqTimerRunning)
+    {
+        StartHighFrequencyTimer();
+    }
 }
 
 /* Scene 1 texture handles (GPU) */

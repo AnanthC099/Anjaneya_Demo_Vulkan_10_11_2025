@@ -16,13 +16,13 @@ glslangValidator.exe -V -H -o Shader_Scene2.frag.spv Shader_Scene2.frag
 
 glslangValidator.exe -V -H -o Shader_Scene3.vert.spv Shader_Scene3.vert
 
-glslangValidator.exe -V -H -o Shader_Scene3.frag.spv Shader_Scene3.frag 
+glslangValidator.exe -V -H -o Shader_Scene3.frag.spv Shader_Scene3.frag
 
-cl.exe /c /EHsc /I C:\VulkanSDK\Anjaneya\Include SceneSwitcher.cpp Scene0.cpp Scene1.cpp Scene2.cpp Scene3.cpp
+cl.exe /c /EHsc /I C:\VulkanSDK\Anjaneya\Include /I .\AL SceneSwitcher.cpp Scene0.cpp Scene1.cpp Scene2.cpp Scene3.cpp
 
 rc.exe Scene0.rc
 
-link.exe  SceneSwitcher.obj Scene0.obj Scene1.obj Scene2.obj Scene3.obj Scene0.res /LIBPATH:C:\VulkanSDK\Anjaneya\Lib /SUBSYSTEM:WINDOWS
+link.exe  SceneSwitcher.obj Scene0.obj Scene1.obj Scene2.obj Scene3.obj Scene0.res OpenAL32.lib /LIBPATH:C:\VulkanSDK\Anjaneya\Lib /SUBSYSTEM:WINDOWS
 
 SceneSwitcher.exe
 

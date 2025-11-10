@@ -350,6 +350,7 @@ void InitializeSceneSwitcherGlobals(void);
 
 // Scene sequence management
 void BeginScene0Audio(void);
+void SceneSwitcher_SetScene0AudioGain(float gain);
 void StartSceneSequence(void);
 void UpdateSceneSequence(void);
 void StopSceneSequence(void);

@@ -458,6 +458,8 @@ Initialize() --> createFences() is succedded
 Initialize() --> buildCommandBuffers() is succedded
 Initialize() --> Initialization is completed successfully
 WinMain() --> Initialize() is succedded
+WndProc() --> Showcase sequence started
+BeginScene0Audio() --> Playing Omega_FadeOut.wav
 Resize() --> vkDeviceWaitIdle() is done
 Resize() --> gCtx_Switcher.vkFrameBuffer_array() is done
 Resize() --> vkFreeCommandBuffers() is done
@@ -515,8 +517,6 @@ createCommandBuffers() --> scene2 vkAllocateCommandBuffers() succeeded for itera
 createCommandBuffers() --> scene2 vkAllocateCommandBuffers() succeeded for iteration 1
 createCommandBuffers() --> scene3 vkAllocateCommandBuffers() succeeded for iteration 0
 createCommandBuffers() --> scene3 vkAllocateCommandBuffers() succeeded for iteration 1
-WndProc() --> Showcase sequence started
-BeginScene0Audio() --> Playing Omega_FadeOut.wav
 Resize() --> vkDeviceWaitIdle() is done
 Resize() --> gCtx_Switcher.vkFrameBuffer_array() is done
 Resize() --> vkFreeCommandBuffers() is done
